@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  workout-app:
+    image: ghcr.io/dragoneat666/forge-workout:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

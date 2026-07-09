@@ -1,0 +1,27 @@
+# Data - NEVER commit this (your database and uploads)
+data/
+
+# Node modules
+node_modules/
+*/node_modules/
+
+# Build artifacts
+frontend/build/
+*/build/
+
+# Environment files
+.env
+.env.local
+.env.*
+
+# Docker
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

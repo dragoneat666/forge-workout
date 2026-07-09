@@ -1,0 +1,14 @@
+# Use this file to build from source instead of pulling from registry:
+# docker compose -f docker-compose.build.yml up -d --build
+version: '3.8'
+
+services:
+  workout-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
