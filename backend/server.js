@@ -13,9 +13,11 @@ app.use(express.json({ limit: '50mb' }));
 
 // ── Directories ───────────────────────────────────────────────────────────────
 const dataDir    = '/data';
-const uploadsDir = path.join(dataDir, 'uploads');
+const uploadsDir    = path.join(dataDir, 'uploads');
+const animationsDir = '/animation_files';
 const backupsDir = path.join(dataDir, 'backups');
 [dataDir, uploadsDir, backupsDir].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+if (!fs.existsSync(animationsDir)) { try { fs.mkdirSync(animationsDir, { recursive: true }); } catch(e) {} }
 
 // ── File upload ───────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -1793,12 +1795,17 @@ app.put('/api/exercises/:id/model', express.json(), (req, res) => {
   res.json({ ok:true });
 });
 
+// ── Serve animation files ────────────────────────────────────────────────────
+app.use('/animations', express.static(animationsDir));
+
 // ── Serve GLB 3D models ───────────────────────────────────────────────────────
 app.get('/api/models', (req, res) => {
   try {
-    const files = fs.readdirSync(uploadsDir)
-      .filter(f => f.endsWith('.glb'))
-      .map(f => ({ name: f, url: `/uploads/${f}` }));
+    const files = fs.existsSync(animationsDir)
+      ? fs.readdirSync(animationsDir)
+          .filter(f => f.endsWith('.glb') || f.endsWith('.fbx'))
+          .map(f => ({ name: f, url: `/animations/${f}` }))
+      : [];
     res.json(files);
   } catch(e) { res.json([]); }
 });
