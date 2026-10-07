@@ -1,16 +1,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { DEFAULT_PCTS, deriveWeights, maxFrom, pctFor } from '../trainingWeights';
+
+const WEIGHT_FIELDS = [
+  { key:'endurance', label:'Endurance', color:'#4aa3ff' },
+  { key:'strength',  label:'Strength',  color:'#ff8c5a' },
+  { key:'max',       label:'Max',       color:'var(--accent)' },
+];
 
 export default function StatsPage({ api }) {
   const [exercises, setExercises] = useState([]);
+  const [pcts,      setPcts]      = useState(DEFAULT_PCTS);
   const [search,    setSearch]    = useState('');
   const [expanded,  setExpanded]  = useState(null);
   const [loading,   setLoading]   = useState(true);
-  const [editMax,   setEditMax]   = useState({});  // exerciseId -> value being edited
 
   const load = () => {
-    setLoading(true);
-    api.get('/stats/exercises').then(d => { setExercises(d); setLoading(false); });
+    Promise.all([api.get('/stats/exercises'), api.get('/training-weights')]).then(([ex, tw]) => {
+      setExercises(ex);
+      setPcts({ endurance_pct: tw.endurance_pct, strength_pct: tw.strength_pct });
+      setLoading(false);
+    });
   };
 
   useEffect(() => { load(); }, []);
@@ -19,14 +29,6 @@ export default function StatsPage({ api }) {
     if (!search.trim()) return exercises;
     return exercises.filter(e => e.name.toLowerCase().includes(search.toLowerCase()));
   }, [exercises, search]);
-
-  const handleMaxSave = async (exId) => {
-    const val = parseFloat(editMax[exId]);
-    if (isNaN(val)) return;
-    await api.put(`/stats/exercises/${exId}/max`, { max_weight: val });
-    setEditMax(prev => { const n={...prev}; delete n[exId]; return n; });
-    load();
-  };
 
   return (
     <div>
@@ -45,8 +47,8 @@ export default function StatsPage({ api }) {
       <div style={{ display:'flex', flexDirection:'column', gap:0 }}>
         {filtered.map((ex, i) => {
           const isExpanded = expanded === ex.id;
-          const hasData    = ex.current_weight > 0;
-          const isEditingMax = editMax[ex.id] !== undefined;
+          const isCardio   = ex.exercise_type === 'cardio';
+          const linked     = (ex.linked_entries?.strength || 0) + (ex.linked_entries?.endurance || 0);
 
           return (
             <div key={ex.id}>
@@ -64,24 +66,19 @@ export default function StatsPage({ api }) {
                     {ex.name}
                   </div>
                   <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>
-                    {ex.exercise_type === 'cardio' ? 'Cardio' : 'Strength'}
-                    {hasData ? ` · Current: ${ex.current_weight} lbs` : ' · No data yet'}
+                    {isCardio ? 'Cardio' : linked ? `Linked to ${linked} workout${linked!==1?'s':''}` : 'Not linked to any workouts'}
                   </div>
                 </div>
-                {hasData && (
-                  <div style={{ display:'flex', gap:16, alignItems:'center', flexShrink:0 }}>
-                    <div style={{ textAlign:'center' }}>
-                      <div style={{ fontSize:10, color:'var(--text3)', letterSpacing:1, textTransform:'uppercase' }}>Current</div>
-                      <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:20, color:'var(--accent)' }}>
-                        {ex.current_weight}<span style={{ fontSize:11, fontWeight:400 }}> lbs</span>
+                {!isCardio && (
+                  <div className="weight-cols">
+                    {WEIGHT_FIELDS.map(f => (
+                      <div key={f.key} className="weight-col">
+                        <div className="weight-col-label">{f.label}</div>
+                        <div className="weight-col-value" style={{ color: ex[`${f.key}_weight`] ? f.color : 'var(--text3)' }}>
+                          {ex[`${f.key}_weight`] || '—'}
+                        </div>
                       </div>
-                    </div>
-                    <div style={{ textAlign:'center' }}>
-                      <div style={{ fontSize:10, color:'var(--text3)', letterSpacing:1, textTransform:'uppercase' }}>Max</div>
-                      <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:20, color:'var(--text)' }}>
-                        {ex.max_weight || '—'}{ex.max_weight ? <span style={{ fontSize:11, fontWeight:400 }}> lbs</span> : ''}
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 )}
                 <span style={{ color:'var(--text3)', fontSize:14, flexShrink:0 }}>{isExpanded ? '▲' : '▼'}</span>
@@ -91,47 +88,7 @@ export default function StatsPage({ api }) {
               {isExpanded && (
                 <div style={{ padding:'16px 20px', background:'var(--bg3)', border:'1px solid var(--border)',
                   borderTop:'none', borderLeft:'3px solid var(--accent)' }}>
-
-                  <div style={{ display:'flex', gap:24, flexWrap:'wrap', marginBottom:16 }}>
-                    {/* Current Weight */}
-                    <div className="card-sm" style={{ minWidth:140 }}>
-                      <div style={{ fontSize:10, color:'var(--text3)', letterSpacing:1.5, textTransform:'uppercase', marginBottom:4 }}>Current Weight</div>
-                      <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:28, color:'var(--accent)' }}>
-                        {ex.current_weight > 0 ? `${ex.current_weight} lbs` : '—'}
-                      </div>
-                      <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>Next scheduled weight</div>
-                    </div>
-
-                    {/* Max Weight — editable */}
-                    <div className="card-sm" style={{ minWidth:200 }}>
-                      <div style={{ fontSize:10, color:'var(--text3)', letterSpacing:1.5, textTransform:'uppercase', marginBottom:4 }}>Personal Max</div>
-                      {isEditingMax ? (
-                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                          <input
-                            className="form-input"
-                            type="number" min="0" step="0.5"
-                            value={editMax[ex.id]}
-                            onChange={e => setEditMax(prev => ({...prev, [ex.id]: e.target.value}))}
-                            style={{ width:100 }}
-                            autoFocus
-                            onKeyDown={e => { if(e.key==='Enter') handleMaxSave(ex.id); if(e.key==='Escape') setEditMax(prev => {const n={...prev}; delete n[ex.id]; return n;}); }}
-                          />
-                          <button className="btn btn-primary btn-sm" onClick={() => handleMaxSave(ex.id)}>Save</button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => setEditMax(prev => {const n={...prev}; delete n[ex.id]; return n;})}>✕</button>
-                        </div>
-                      ) : (
-                        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                          <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:28, color:'var(--text)' }}>
-                            {ex.max_weight > 0 ? `${ex.max_weight} lbs` : '—'}
-                          </div>
-                          <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); setEditMax(prev => ({...prev, [ex.id]: ex.max_weight || ''})); }}>
-                            Edit
-                          </button>
-                        </div>
-                      )}
-                      <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>Auto-bumps if current exceeds it</div>
-                    </div>
-                  </div>
+                  {!isCardio && <TrainingWeightsEditor ex={ex} pcts={pcts} api={api} onSaved={load} />}
 
                   {/* Progress graph */}
                   <ExerciseGraph exId={ex.id} api={api} />
@@ -140,6 +97,72 @@ export default function StatsPage({ api }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// Three linked inputs: typing in any one recalculates the other two from the implied Max
+function TrainingWeightsEditor({ ex, pcts, api, onSaved }) {
+  const [draft,  setDraft]  = useState(null); // { field, value } — the box being typed in
+  const [saving, setSaving] = useState(false);
+
+  const draftNum = draft ? parseFloat(draft.value) : NaN;
+  const preview  = draftNum > 0 ? deriveWeights(maxFrom(draft.field, draftNum, pcts), pcts) : null;
+  const shown = field => {
+    if (draft?.field === field) return draft.value;
+    if (draft) return preview ? preview[field] : '';
+    return ex[`${field}_weight`] || '';
+  };
+  const canSave = draft && draftNum >= 0;
+
+  const save = async () => {
+    if (!canSave || saving) return;
+    setSaving(true);
+    await api.put(`/stats/exercises/${ex.id}/max`, { training_type: draft.field, weight: draftNum });
+    setSaving(false);
+    setDraft(null);
+    onSaved();
+  };
+
+  const clear = async () => {
+    if (!window.confirm(`Clear the saved weights for ${ex.name}?\n\nLinked workouts keep their current weight.`)) return;
+    await api.put(`/stats/exercises/${ex.id}/max`, { training_type: 'max', weight: 0 });
+    onSaved();
+  };
+
+  const { strength=0, endurance=0 } = ex.linked_entries || {};
+  const linkedText = [strength && `${strength} Strength`, endurance && `${endurance} Endurance`].filter(Boolean).join(', ');
+
+  return (
+    <div className="card-sm" style={{ marginBottom:16 }}>
+      <div style={{ fontSize:10, color:'var(--text3)', letterSpacing:1.5, textTransform:'uppercase', marginBottom:10 }}>Training Weights (lbs)</div>
+      <div className="weight-editor">
+        {WEIGHT_FIELDS.map(f => (
+          <div key={f.key} className="form-group" style={{ margin:0 }}>
+            <label className="form-label" style={{ color:f.color }}>
+              {f.label} <span style={{ color:'var(--text3)', fontWeight:400 }}>{pctFor(f.key, pcts)}%</span>
+            </label>
+            <input className="form-input" type="number" min="0" step="0.25" inputMode="decimal"
+              aria-label={`${f.label} weight`} placeholder="—" value={shown(f.key)}
+              onChange={e => setDraft({ field:f.key, value:e.target.value })}
+              onKeyDown={e => { if (e.key==='Enter') save(); if (e.key==='Escape') setDraft(null); }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize:11, color:'var(--text3)', marginTop:8, lineHeight:1.6 }}>
+        Enter any one — the other two are calculated.
+        {linkedText
+          ? <> Linked workouts ({linkedText}) update automatically.</>
+          : <> Pick Strength or Endurance Training on a workout exercise to link it here.</>}
+      </div>
+      <div style={{ display:'flex', gap:8, marginTop:10 }}>
+        {draft ? (<>
+          <button className="btn btn-primary btn-sm" onClick={save} disabled={!canSave || saving}>{saving ? 'Saving…' : 'Save'}</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setDraft(null)}>Cancel</button>
+        </>) : ex.max_weight > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={clear}>Clear</button>
+        )}
       </div>
     </div>
   );

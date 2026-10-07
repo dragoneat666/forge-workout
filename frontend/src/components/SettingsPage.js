@@ -1,6 +1,48 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ExerciseConflictModal, EquipmentConflictModal } from './ImportConflictModal';
 
+// Percentages of Max used for Endurance and Strength training weights
+function TrainingWeightSettings({ api }) {
+  const [pcts,   setPcts]   = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [msg,    setMsg]    = useState(null);
+
+  useEffect(() => {
+    api.get('/training-weights').then(t => setPcts({ endurance_pct: t.endurance_pct, strength_pct: t.strength_pct })).catch(()=>{});
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setMsg(null);
+    const r = await api.put('/settings', { endurance_pct: pcts.endurance_pct, strength_pct: pcts.strength_pct });
+    setSaving(false);
+    setMsg(r.error ? { ok:false, text: r.error } : { ok:true, text:'✓ Saved. Linked workout weights were recalculated.' });
+  };
+
+  if (!pcts) return null;
+  return (
+    <div className="card" style={{ marginBottom:20 }}>
+      <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:18,
+        textTransform:'uppercase', letterSpacing:1, color:'var(--accent)', marginBottom:6 }}>
+        Training Weights
+      </div>
+      <div style={{ fontSize:13, color:'var(--text3)', marginBottom:14 }}>
+        Endurance and Strength weights are a percentage of each lift's Max (100%).
+      </div>
+      <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-end' }}>
+        {[['endurance_pct','Endurance % of Max'], ['strength_pct','Strength % of Max']].map(([key, label]) => (
+          <div key={key} className="form-group" style={{ flex:1, minWidth:150, margin:0 }}>
+            <label className="form-label">{label}</label>
+            <input type="number" className="form-input" min="1" max="100" step="1" value={pcts[key]}
+              onChange={e => setPcts(p => ({ ...p, [key]: e.target.value }))} />
+          </div>
+        ))}
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+      {msg && <div style={{ fontSize:12, marginTop:10, color: msg.ok ? 'var(--green)' : '#ff6b6b' }}>{msg.text}</div>}
+    </div>
+  );
+}
+
 export default function SettingsPage({ api }) {
   const [status,     setStatus]     = useState(null);
   const [settings,   setSettings]   = useState(null);
@@ -127,6 +169,8 @@ export default function SettingsPage({ api }) {
             style={{ color:'var(--accent)', textDecoration:'none' }}>github.com/dragoneat666/forge-workout</a>
         </div>
       </div>
+
+      <TrainingWeightSettings api={api} />
 
       {/* Exercise & Equipment Sync */}
       <ExerciseSyncSection api={api} />

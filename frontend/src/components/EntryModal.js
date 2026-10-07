@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import BodyDiagram, { MUSCLE_GROUPS } from './BodyDiagram';
+import { DEFAULT_PCTS, TRAINING_TYPES, deriveWeights, maxFrom, pctFor, roundWeight } from '../trainingWeights';
 
 function loadSavedMuscles() {
   try {
@@ -66,6 +67,31 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
   const selectedEx = exercises.find(e => e.id === parseInt(exerciseId));
   const isCardio = selectedEx?.exercise_type === 'cardio';
 
+  // Training type links this entry's weight to the lift's weights in My Stats.
+  // New entries default to Strength; older entries start unset until one is picked.
+  const [trainingType, setTrainingType] = useState(initial ? (initial.training_type || '') : 'strength');
+  const [savedWeights, setSavedWeights] = useState(null); // { endurance_pct, strength_pct, maxes }
+  useEffect(() => {
+    fetch('/api/training-weights').then(r => r.json()).then(setSavedWeights)
+      .catch(() => setSavedWeights({ ...DEFAULT_PCTS, maxes:{} }));
+  }, []);
+
+  const pcts         = savedWeights || DEFAULT_PCTS;
+  const saved        = savedWeights && selectedEx ? deriveWeights(savedWeights.maxes[selectedEx.id], pcts) : null;
+  const pulledWeight = saved && trainingType ? saved[trainingType] : 0;
+  const trainingLabel = TRAINING_TYPES.find(t => t.key === trainingType)?.label.split(' ')[0];
+
+  // Auto-pull the saved training weight whenever the lift or training type changes
+  useEffect(() => {
+    if (pulledWeight > 0) setWeight(pulledWeight);
+  }, [savedWeights, exerciseId, trainingType]); // eslint-disable-line
+
+  const enteredWeight = parseFloat(weight) || 0;
+  const updatesMyStats = !!trainingType && enteredWeight > 0 && roundWeight(enteredWeight) !== pulledWeight;
+  const newWeights = updatesMyStats ? deriveWeights(maxFrom(trainingType, enteredWeight, pcts), pcts) : null;
+  // Weight this entry had before it was linked, so it isn't silently lost
+  const legacyWeight = initial && !initial.training_type ? (parseFloat(initial.weight) || 0) : 0;
+
   // When exercise changes, flip defaults
   const handleExerciseChange = (id) => {
     setExerciseId(id);
@@ -81,6 +107,8 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
     if (!exerciseId) return alert('Please select an exercise');
     if (isCardio) {
       if (!distance && !duration) return alert('Enter at least a distance or duration for cardio exercises');
+    } else if (!trainingType) {
+      return alert('Choose Strength Training or Endurance Training for this lift');
     }
     onSave({
       exercise_id:          parseInt(exerciseId),
@@ -99,6 +127,7 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
       last_set_bump_value: parseFloat(lastSetBumpVal) || 10,
       cardio_mode:   cardioMode,
       cardio_stages: showStages ? cardioStages : [],
+      training_type: isCardio ? '' : trainingType,
     });
   };
 
@@ -278,6 +307,16 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
         {/* ── STRENGTH FIELDS ── */}
         {!isCardio && selectedEx && (
           <>
+            <div className="form-group">
+              <label className="form-label">Training Type</label>
+              <select className="form-select" value={trainingType} onChange={e=>setTrainingType(e.target.value)}>
+                {!trainingType && <option value="" disabled>— Select training type —</option>}
+                {TRAINING_TYPES.map(t => (
+                  <option key={t.key} value={t.key}>{t.label} ({pctFor(t.key, pcts)}% of Max)</option>
+                ))}
+              </select>
+            </div>
+
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Weight (lbs)</label>
@@ -295,6 +334,36 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
                   value={reps} onChange={e=>setReps(e.target.value)} />
               </div>
             </div>
+
+            {savedWeights && (
+              <div className="training-note">
+                {!trainingType ? (
+                  <>Pick a training type to link this weight to <strong>My Stats</strong>.</>
+                ) : updatesMyStats ? (
+                  <>
+                    {saved.max > 0
+                      ? <>Saving updates <strong>{selectedEx.name}</strong> in My Stats (Max was {saved.max} lbs):</>
+                      : <>No {trainingLabel} weight saved for <strong>{selectedEx.name}</strong> yet — saving sets My Stats to:</>}
+                    <div className="training-note-weights">
+                      <span>Endurance <strong>{newWeights.endurance}</strong></span>
+                      <span>Strength <strong>{newWeights.strength}</strong></span>
+                      <span>Max <strong>{newWeights.max}</strong> lbs</span>
+                    </div>
+                    {saved.max > 0 && <div className="training-note-sub">Other workouts linked to this lift update too.</div>}
+                  </>
+                ) : pulledWeight > 0 ? (
+                  <>✓ Pulled from My Stats — {trainingLabel} is {pctFor(trainingType, pcts)}% of your <strong>{saved.max} lbs</strong> Max.</>
+                ) : (
+                  <>No {trainingLabel} weight saved for <strong>{selectedEx.name}</strong> yet — enter one and it will be saved to My Stats.</>
+                )}
+                {trainingType && pulledWeight > 0 && legacyWeight > 0 && legacyWeight !== enteredWeight && (
+                  <div className="training-note-sub">
+                    This entry was {legacyWeight} lbs before linking.{' '}
+                    <button className="link-btn" onClick={()=>setWeight(legacyWeight)}>Use {legacyWeight} lbs</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {!isCardio && <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:8, padding:14, marginBottom:14 }}>
               <div style={{ fontSize:10, letterSpacing:1.5, textTransform:'uppercase', color:'var(--green)', marginBottom:10, fontWeight:700 }}>Progressive Overload</div>

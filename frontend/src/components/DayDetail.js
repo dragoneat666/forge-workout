@@ -157,6 +157,9 @@ export default function DayDetail({ day, exercises, onBack, onReload, api }) {
                           </>) : (<>
                             <span className="entry-stat"><strong>{entry.weight}</strong> lbs</span>
                             <span className="entry-stat"><strong>{entry.sets}</strong> sets × <strong>{entry.reps}</strong> reps</span>
+                            {entry.training_type
+                              ? <span className={`training-badge ${entry.training_type}`}>{entry.training_type==='endurance'?'Endurance':'Strength'} Training</span>
+                              : <span className="training-badge" title="Edit this exercise to pick Strength or Endurance Training">No training type</span>}
                             <span className="increase-badge">+{entry.weight_increase_value}{entry.weight_increase_type==='percent'?'%':' lbs'} next</span>
                             {!!(entry.last_set_bump===1||entry.last_set_bump===true) && (
                               <span className="increase-badge" style={{ color:'var(--accent)', background:'#e8ff0015', borderColor:'#e8ff0040' }}>

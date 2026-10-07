@@ -150,6 +150,28 @@ body { background: var(--bg); color: var(--text); font-family: 'Barlow', sans-se
 .entry-stat strong { color: var(--accent); font-weight: 600; }
 .increase-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; color: var(--green); background: #34c75920; border: 1px solid #34c75940; border-radius: 99px; padding: 2px 7px; }
 
+/* ── Training weights (Strength / Endurance linked to My Stats) ── */
+.training-badge { display: inline-flex; align-items: center; font-size: 10px; font-weight: 600; border-radius: 99px; padding: 2px 7px; color: var(--text3); background: var(--bg4); border: 1px solid var(--border); }
+.training-badge.strength  { color: #ff8c5a; background: #ff6b3518; border-color: #ff6b3540; }
+.training-badge.endurance { color: #4aa3ff; background: #0a84ff18; border-color: #0a84ff40; }
+.training-note { font-size: 12px; color: var(--text2); line-height: 1.6; background: var(--bg3); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 10px 12px; margin: -4px 0 14px; }
+.training-note strong { color: var(--text); }
+.training-note-weights { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+.training-note-weights strong { color: var(--accent); }
+.training-note-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.weight-cols { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+.weight-col { text-align: center; min-width: 52px; }
+.weight-col-label { font-size: 10px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; }
+.weight-col-value { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 20px; }
+.weight-editor { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 480px) {
+  .weight-cols { gap: 6px; }
+  .weight-col { min-width: 40px; }
+  .weight-col-label { font-size: 9px; letter-spacing: 0.5px; }
+  .weight-col-value { font-size: 16px; }
+}
+
 /* ── Detail layout ── */
 .detail-layout { display: grid; grid-template-columns: 1fr 320px; gap: 22px; align-items: start; }
 @media (max-width: 860px) { .detail-layout { grid-template-columns: 1fr; } }
