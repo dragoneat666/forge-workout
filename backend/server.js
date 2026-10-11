@@ -216,6 +216,8 @@ safeAlter('workout_entries', 'training_type', "TEXT DEFAULT ''");
 // Per-lift percentage overrides; NULL = follow the global percentages
 safeAlter('exercise_maxes', 'endurance_pct', 'REAL DEFAULT NULL');
 safeAlter('exercise_maxes', 'strength_pct', 'REAL DEFAULT NULL');
+// Per-lift rounding increment (2.5 or 5 lbs); NULL = follow the global setting
+safeAlter('exercise_maxes', 'round_to', 'REAL DEFAULT NULL');
 
 // ── App settings table ────────────────────────────────────────────────────────
 db.exec(`
@@ -237,44 +239,61 @@ function getSetting(key, def='') {
 // Each lift stores a single Max (exercise_maxes). Endurance and Strength weights
 // are percentages of it, and workout entries linked to a training type always
 // carry that derived weight. Changing any one of them moves the Max.
-// The stored Max is kept unrounded so an entered training weight survives the
-// round trip; every displayed/derived weight is rounded down to a whole pound.
+// The stored Max is kept unrounded; every displayed/derived weight is rounded to
+// the lift's increment (5 or 2.5 lbs): Endurance and Max round down, Strength up.
 const TRAINING_TYPES = ['endurance', 'strength'];
+const ROUND_OPTIONS = [2.5, 5];
 const roundWeight = w => Math.round(w * 4) / 4;
-const floorWeight = w => Math.floor(w + 1e-9); // epsilon absorbs float error, e.g. 64.99999999
+// Epsilon absorbs float error so an exact multiple (e.g. 64.99999999 of 5) isn't pushed a step
+const roundDownTo = (w, inc) => Math.floor(w / inc + 1e-9) * inc;
+const roundUpTo   = (w, inc) => Math.ceil(w / inc - 1e-9) * inc;
+const ROUNDING = { endurance: roundDownTo, strength: roundUpTo, max: roundDownTo };
 const validPct = v => parseFloat(v) > 0 && parseFloat(v) <= 100;
+const validRound = v => ROUND_OPTIONS.includes(parseFloat(v));
 
-function getGlobalPcts() {
+function getGlobalSettings() {
   const pct = (key, def) => { const v = getSetting(key, def); return validPct(v) ? parseFloat(v) : def; };
-  return { endurance: pct('endurance_pct', 40), strength: pct('strength_pct', 60) };
+  const roundTo = getSetting('round_to', '5');
+  return { endurance: pct('endurance_pct', 40), strength: pct('strength_pct', 60),
+    roundTo: validRound(roundTo) ? parseFloat(roundTo) : 5 };
 }
-// A lift with its own percentages (set in My Stats) ignores the global ones
+// A lift with its own percentages or rounding (set in My Stats) ignores the global ones
 const hasCustomPcts = row => validPct(row?.endurance_pct) && validPct(row?.strength_pct);
-const liftPcts = (row, globalPcts = getGlobalPcts()) =>
-  hasCustomPcts(row) ? { endurance: row.endurance_pct, strength: row.strength_pct } : globalPcts;
-function getTrainingPcts(exerciseId) {
-  return liftPcts(db.prepare('SELECT endurance_pct, strength_pct FROM exercise_maxes WHERE exercise_id=?').get(exerciseId));
+const hasCustomRounding = row => validRound(row?.round_to);
+const liftSettings = (row, global = getGlobalSettings()) => ({
+  endurance: hasCustomPcts(row) ? row.endurance_pct : global.endurance,
+  strength:  hasCustomPcts(row) ? row.strength_pct  : global.strength,
+  roundTo:   hasCustomRounding(row) ? row.round_to : global.roundTo,
+});
+function getLiftSettings(exerciseId) {
+  return liftSettings(db.prepare('SELECT endurance_pct, strength_pct, round_to FROM exercise_maxes WHERE exercise_id=?').get(exerciseId));
 }
+// Settings fields for API responses
+const settingsJson = (cfg, row) => ({ endurance_pct: cfg.endurance, strength_pct: cfg.strength, round_to: cfg.roundTo,
+  custom_pcts: hasCustomPcts(row), custom_rounding: hasCustomRounding(row) });
 function getMax(exerciseId) {
   return db.prepare('SELECT max_weight FROM exercise_maxes WHERE exercise_id=?').get(exerciseId)?.max_weight || 0;
 }
-function trainingWeights(max, pcts) {
+// field: 'endurance' | 'strength' | 'max'
+const trainingWeight = (max, field, cfg) =>
+  ROUNDING[field](field === 'max' ? max : max * cfg[field] / 100, cfg.roundTo);
+function trainingWeights(max, cfg) {
   const has = max > 0;
   return {
-    max_weight:       has ? floorWeight(max) : 0,
-    endurance_weight: has ? floorWeight(max * pcts.endurance / 100) : 0,
-    strength_weight:  has ? floorWeight(max * pcts.strength  / 100) : 0,
+    max_weight:       has ? trainingWeight(max, 'max', cfg) : 0,
+    endurance_weight: has ? trainingWeight(max, 'endurance', cfg) : 0,
+    strength_weight:  has ? trainingWeight(max, 'strength', cfg) : 0,
   };
 }
-function syncLinkedEntries(exerciseId, max, pcts = getTrainingPcts(exerciseId)) {
+function syncLinkedEntries(exerciseId, max, cfg = getLiftSettings(exerciseId)) {
   if (!(max > 0)) return;
   const upd = db.prepare('UPDATE workout_entries SET weight=? WHERE exercise_id=? AND training_type=?');
-  TRAINING_TYPES.forEach(t => upd.run(floorWeight(max * pcts[t] / 100), exerciseId, t));
+  TRAINING_TYPES.forEach(t => upd.run(trainingWeight(max, t, cfg), exerciseId, t));
 }
 function syncAllLinkedEntries() {
-  const globalPcts = getGlobalPcts();
-  db.prepare('SELECT exercise_id, max_weight, endurance_pct, strength_pct FROM exercise_maxes').all()
-    .forEach(m => syncLinkedEntries(m.exercise_id, m.max_weight, liftPcts(m, globalPcts)));
+  const global = getGlobalSettings();
+  db.prepare('SELECT * FROM exercise_maxes').all()
+    .forEach(m => syncLinkedEntries(m.exercise_id, m.max_weight, liftSettings(m, global)));
 }
 function upsertMax(exerciseId, max) {
   db.prepare(`INSERT INTO exercise_maxes (exercise_id,max_weight) VALUES (?,?)
@@ -289,14 +308,15 @@ function setExerciseMax(exerciseId, max) {
 // drifts the Max. With weight 0 the entry simply pulls the existing training weight.
 function applyTrainingWeight(exerciseId, trainingType, weight) {
   if (!TRAINING_TYPES.includes(trainingType)) return;
-  const pcts = getTrainingPcts(exerciseId);
+  const cfg = getLiftSettings(exerciseId);
   let max = getMax(exerciseId);
-  const unchanged = max > 0 && floorWeight(max * pcts[trainingType] / 100) === floorWeight(weight);
+  const unchanged = max > 0 &&
+    trainingWeight(max, trainingType, cfg) === ROUNDING[trainingType](weight, cfg.roundTo);
   if (weight > 0 && !unchanged) {
-    max = weight * 100 / pcts[trainingType];
+    max = weight * 100 / cfg[trainingType];
     upsertMax(exerciseId, max);
   }
-  syncLinkedEntries(exerciseId, max, pcts);
+  syncLinkedEntries(exerciseId, max, cfg);
 }
 const cleanTrainingType = (tt, exerciseType) =>
   exerciseType !== 'cardio' && TRAINING_TYPES.includes(tt) ? tt : '';
@@ -312,7 +332,7 @@ function applyProgressiveOverload(sessionExercises) {
       ? e.weight * (1 + entry.weight_increase_value / 100)
       : e.weight + entry.weight_increase_value);
     if (TRAINING_TYPES.includes(entry.training_type)) {
-      const max = newWeight * 100 / getTrainingPcts(entry.exercise_id)[entry.training_type];
+      const max = newWeight * 100 / getLiftSettings(entry.exercise_id)[entry.training_type];
       newMaxes[entry.exercise_id] = Math.max(newMaxes[entry.exercise_id] || 0, max);
     } else {
       db.prepare('UPDATE workout_entries SET weight=? WHERE id=?').run(newWeight, entry.id);
@@ -1035,14 +1055,13 @@ app.get('/api/stats/exercises', (req, res) => {
   const lifts = Object.fromEntries(db.prepare('SELECT * FROM exercise_maxes').all().map(m => [m.exercise_id, m]));
   const linkCounts = db.prepare(`SELECT exercise_id, training_type, COUNT(*) as c FROM workout_entries
     WHERE training_type IN ('strength','endurance') GROUP BY exercise_id, training_type`).all();
-  const globalPcts = getGlobalPcts();
+  const global = getGlobalSettings();
 
   res.json(exercises.map(ex => {
     const linked = { strength:0, endurance:0 };
     linkCounts.filter(l => l.exercise_id === ex.id).forEach(l => { linked[l.training_type] = l.c; });
-    const lift = lifts[ex.id], pcts = liftPcts(lift, globalPcts);
-    return { ...ex, ...trainingWeights(lift?.max_weight || 0, pcts), linked_entries: linked,
-      endurance_pct: pcts.endurance, strength_pct: pcts.strength, custom_pcts: hasCustomPcts(lift) };
+    const lift = lifts[ex.id], cfg = liftSettings(lift, global);
+    return { ...ex, ...trainingWeights(lift?.max_weight || 0, cfg), linked_entries: linked, ...settingsJson(cfg, lift) };
   }));
 });
 
@@ -1052,37 +1071,53 @@ app.put('/api/stats/exercises/:id/max', (req, res) => {
   const { training_type='max' } = req.body;
   const weight = parseFloat(req.body.weight ?? req.body.max_weight);
   if (!(weight >= 0)) return res.status(400).json({ error:'Weight must be a number of 0 or more' });
-  const pcts = getTrainingPcts(req.params.id);
-  const max = TRAINING_TYPES.includes(training_type) ? weight * 100 / pcts[training_type] : weight;
+  const cfg = getLiftSettings(req.params.id);
+  const max = TRAINING_TYPES.includes(training_type) ? weight * 100 / cfg[training_type] : weight;
   setExerciseMax(req.params.id, max);
-  res.json(trainingWeights(max, pcts));
+  res.json(trainingWeights(max, cfg));
 });
+
+// Save per-lift overrides (null columns = follow global), re-sync the lift's linked
+// entries and return its weights + settings
+function setLiftOverrides(exerciseId, cols) {
+  const names = Object.keys(cols);
+  db.prepare(`INSERT INTO exercise_maxes (exercise_id,max_weight,${names.join(',')}) VALUES (?,0,${names.map(() => '?').join(',')})
+    ON CONFLICT(exercise_id) DO UPDATE SET ${names.map(n => `${n}=excluded.${n}`).join(',')}`)
+    .run(exerciseId, ...Object.values(cols));
+  const row = db.prepare('SELECT * FROM exercise_maxes WHERE exercise_id=?').get(exerciseId);
+  const cfg = liftSettings(row), max = row.max_weight || 0;
+  syncLinkedEntries(exerciseId, max, cfg);
+  return { ...trainingWeights(max, cfg), ...settingsJson(cfg, row) };
+}
 
 // Per-lift percentages: { endurance_pct, strength_pct } sets them, { reset:true } goes back to global
 app.put('/api/stats/exercises/:id/percentages', (req, res) => {
   const { endurance_pct, strength_pct, reset=false } = req.body;
   if (!reset && !(validPct(endurance_pct) && validPct(strength_pct)))
     return res.status(400).json({ error:'Percentages must be between 1 and 100' });
-  const [e, s] = reset ? [null, null] : [parseFloat(endurance_pct), parseFloat(strength_pct)];
-  db.prepare(`INSERT INTO exercise_maxes (exercise_id,max_weight,endurance_pct,strength_pct) VALUES (?,0,?,?)
-    ON CONFLICT(exercise_id) DO UPDATE SET endurance_pct=excluded.endurance_pct, strength_pct=excluded.strength_pct`)
-    .run(req.params.id, e, s);
-  const pcts = getTrainingPcts(req.params.id), max = getMax(req.params.id);
-  syncLinkedEntries(req.params.id, max, pcts);
-  res.json({ ...trainingWeights(max, pcts), endurance_pct: pcts.endurance, strength_pct: pcts.strength, custom_pcts: !reset });
+  res.json(setLiftOverrides(req.params.id, reset
+    ? { endurance_pct: null, strength_pct: null }
+    : { endurance_pct: parseFloat(endurance_pct), strength_pct: parseFloat(strength_pct) }));
 });
 
-// Global percentages + each lift's raw Max and effective percentages, for
-// pulling training weights into workout entries
+// Per-lift rounding: { round_to: 2.5|5 } sets it, { reset:true } goes back to global
+app.put('/api/stats/exercises/:id/rounding', (req, res) => {
+  const { round_to, reset=false } = req.body;
+  if (!reset && !validRound(round_to))
+    return res.status(400).json({ error:`Rounding must be one of: ${ROUND_OPTIONS.join(', ')} lbs` });
+  res.json(setLiftOverrides(req.params.id, { round_to: reset ? null : parseFloat(round_to) }));
+});
+
+// Global settings + each lift's raw Max and effective settings, for pulling
+// training weights into workout entries
 app.get('/api/training-weights', (req, res) => {
-  const globalPcts = getGlobalPcts();
+  const global = getGlobalSettings();
   const lifts = {};
   db.prepare('SELECT * FROM exercise_maxes').all().forEach(m => {
-    const pcts = liftPcts(m, globalPcts);
-    lifts[m.exercise_id] = { max_weight: m.max_weight || 0, endurance_pct: pcts.endurance,
-      strength_pct: pcts.strength, custom_pcts: hasCustomPcts(m) };
+    lifts[m.exercise_id] = { max_weight: m.max_weight || 0, ...settingsJson(liftSettings(m, global), m) };
   });
-  res.json({ endurance_pct: globalPcts.endurance, strength_pct: globalPcts.strength, lifts });
+  res.json({ endurance_pct: global.endurance, strength_pct: global.strength, round_to: global.roundTo,
+    round_options: ROUND_OPTIONS, lifts });
 });
 
 app.get('/api/stats/exercises/:id/history', (req, res) => {
@@ -1182,18 +1217,20 @@ app.get('/api/settings', (req, res) => {
 });
 
 app.put('/api/settings', (req, res) => {
-  const allowed = ['backup_schedule','backup_time','backup_retain_weeks','endurance_pct','strength_pct'];
+  const allowed = ['backup_schedule','backup_time','backup_retain_weeks','endurance_pct','strength_pct','round_to'];
   const pctKeys = { endurance_pct:'Endurance %', strength_pct:'Strength %' };
   for (const [k, label] of Object.entries(pctKeys)) {
     if (k in req.body && !validPct(req.body[k]))
       return res.status(400).json({ error:`${label} must be between 1 and 100` });
   }
+  if ('round_to' in req.body && !validRound(req.body.round_to))
+    return res.status(400).json({ error:`Rounding must be one of: ${ROUND_OPTIONS.join(', ')} lbs` });
   const upsert  = db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)');
   Object.entries(req.body).forEach(([k,v]) => {
     if (allowed.includes(k)) upsert.run(k, String(v));
   });
-  // New percentages change every derived training weight
-  if (Object.keys(pctKeys).some(k => k in req.body)) syncAllLinkedEntries();
+  // New percentages or rounding change every derived training weight
+  if ([...Object.keys(pctKeys), 'round_to'].some(k => k in req.body)) syncAllLinkedEntries();
   res.json({ ok:true });
 });
 
@@ -1601,8 +1638,8 @@ app.post('/api/backup/restore-json', express.json({ limit: '50mb' }), (req, res)
         data.workout_logs.forEach(l => ins.run(l.id,l.day_id,l.entry_id,l.exercise_id,l.exercise_type||'strength',l.weight||0,l.sets||0,l.reps||0,l.distance||0,l.distance_unit||'miles',l.duration_minutes||0,l.target_speed||0,l.completed_at,l.notes||''));
       }
       if (data.exercise_maxes?.length) {
-        const ins = db.prepare('INSERT OR REPLACE INTO exercise_maxes (exercise_id,max_weight,endurance_pct,strength_pct) VALUES (?,?,?,?)');
-        data.exercise_maxes.forEach(m => ins.run(m.exercise_id, m.max_weight||0, m.endurance_pct ?? null, m.strength_pct ?? null));
+        const ins = db.prepare('INSERT OR REPLACE INTO exercise_maxes (exercise_id,max_weight,endurance_pct,strength_pct,round_to) VALUES (?,?,?,?,?)');
+        data.exercise_maxes.forEach(m => ins.run(m.exercise_id, m.max_weight||0, m.endurance_pct ?? null, m.strength_pct ?? null, m.round_to ?? null));
       }
       if (data.body_weight_logs?.length) {
         const ins = db.prepare('INSERT OR REPLACE INTO body_weight_logs (id,weight,unit,logged_at,notes) VALUES (?,?,?,?,?)');

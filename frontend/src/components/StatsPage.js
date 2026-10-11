@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { DEFAULT_PCTS, deriveWeights, maxFrom, pctFor } from '../trainingWeights';
+import { DEFAULT_SETTINGS, ROUND_OPTIONS, deriveWeights, maxFrom, pctFor } from '../trainingWeights';
 
 const WEIGHT_FIELDS = [
   { key:'endurance', label:'Endurance', color:'#4aa3ff' },
@@ -10,7 +10,7 @@ const WEIGHT_FIELDS = [
 
 export default function StatsPage({ api }) {
   const [exercises, setExercises] = useState([]);
-  const [globalPcts, setGlobalPcts] = useState(DEFAULT_PCTS);
+  const [globalSettings, setGlobalSettings] = useState(DEFAULT_SETTINGS);
   const [search,    setSearch]    = useState('');
   const [expanded,  setExpanded]  = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -18,7 +18,7 @@ export default function StatsPage({ api }) {
   const load = () => {
     Promise.all([api.get('/stats/exercises'), api.get('/training-weights')]).then(([ex, tw]) => {
       setExercises(ex);
-      setGlobalPcts({ endurance_pct: tw.endurance_pct, strength_pct: tw.strength_pct });
+      setGlobalSettings({ endurance_pct: tw.endurance_pct, strength_pct: tw.strength_pct, round_to: tw.round_to });
       setLoading(false);
     });
   };
@@ -68,6 +68,7 @@ export default function StatsPage({ api }) {
                   <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>
                     {isCardio ? 'Cardio' : linked ? `Linked to ${linked} workout${linked!==1?'s':''}` : 'Not linked to any workouts'}
                     {!isCardio && ex.custom_pcts && <span style={{ color:'var(--accent)' }}> · Custom %</span>}
+                    {!isCardio && ex.custom_rounding && <span style={{ color:'var(--accent)' }}> · Rounds to {ex.round_to} lbs</span>}
                   </div>
                 </div>
                 {!isCardio && (
@@ -89,7 +90,7 @@ export default function StatsPage({ api }) {
               {isExpanded && (
                 <div style={{ padding:'16px 20px', background:'var(--bg3)', border:'1px solid var(--border)',
                   borderTop:'none', borderLeft:'3px solid var(--accent)' }}>
-                  {!isCardio && <TrainingWeightsEditor ex={ex} globalPcts={globalPcts} api={api} onSaved={load} />}
+                  {!isCardio && <TrainingWeightsEditor ex={ex} globalSettings={globalSettings} api={api} onSaved={load} />}
 
                   {/* Progress graph */}
                   <ExerciseGraph exId={ex.id} api={api} />
@@ -104,13 +105,13 @@ export default function StatsPage({ api }) {
 }
 
 // Three linked inputs: typing in any one recalculates the other two from the implied Max
-function TrainingWeightsEditor({ ex, globalPcts, api, onSaved }) {
+function TrainingWeightsEditor({ ex, globalSettings, api, onSaved }) {
   const [draft,  setDraft]  = useState(null); // { field, value } — the box being typed in
   const [saving, setSaving] = useState(false);
-  const pcts = { endurance_pct: ex.endurance_pct, strength_pct: ex.strength_pct };
+  const settings = { endurance_pct: ex.endurance_pct, strength_pct: ex.strength_pct, round_to: ex.round_to };
 
   const draftNum = draft ? parseFloat(draft.value) : NaN;
-  const preview  = draftNum > 0 ? deriveWeights(maxFrom(draft.field, draftNum, pcts), pcts) : null;
+  const preview  = draftNum > 0 ? deriveWeights(maxFrom(draft.field, draftNum, settings), settings) : null;
   const shown = field => {
     if (draft?.field === field) return draft.value;
     if (draft) return preview ? preview[field] : '';
@@ -143,9 +144,9 @@ function TrainingWeightsEditor({ ex, globalPcts, api, onSaved }) {
         {WEIGHT_FIELDS.map(f => (
           <div key={f.key} className="form-group" style={{ margin:0 }}>
             <label className="form-label" style={{ color:f.color }}>
-              {f.label} <span style={{ color:'var(--text3)', fontWeight:400 }}>{pctFor(f.key, pcts)}%</span>
+              {f.label} <span style={{ color:'var(--text3)', fontWeight:400 }}>{pctFor(f.key, settings)}%</span>
             </label>
-            <input className="form-input" type="number" min="0" step="1" inputMode="decimal"
+            <input className="form-input" type="number" min="0" step={ex.round_to} inputMode="decimal"
               aria-label={`${f.label} weight`} placeholder="—" value={shown(f.key)}
               onChange={e => setDraft({ field:f.key, value:e.target.value })}
               onKeyDown={e => { if (e.key==='Enter') save(); if (e.key==='Escape') setDraft(null); }} />
@@ -153,7 +154,7 @@ function TrainingWeightsEditor({ ex, globalPcts, api, onSaved }) {
         ))}
       </div>
       <div style={{ fontSize:11, color:'var(--text3)', marginTop:8, lineHeight:1.6 }}>
-        Enter any one — the other two are calculated and rounded down to whole pounds.
+        Enter any one — the other two are calculated. Rounded to the nearest {ex.round_to} lbs: Endurance and Max round down, Strength rounds up.
         {linkedText
           ? <> Linked workouts ({linkedText}) update automatically.</>
           : <> Pick Strength or Endurance Training on a workout exercise to link it here.</>}
@@ -166,13 +167,14 @@ function TrainingWeightsEditor({ ex, globalPcts, api, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={clear}>Clear</button>
         )}
       </div>
-      <LiftPercentages ex={ex} globalPcts={globalPcts} api={api} onSaved={onSaved} />
+      <LiftPercentages ex={ex} globalSettings={globalSettings} api={api} onSaved={onSaved} />
+      <LiftRounding ex={ex} globalSettings={globalSettings} api={api} onSaved={onSaved} />
     </div>
   );
 }
 
 // Per-lift Endurance/Strength percentages; a lift with its own ignores the global setting
-function LiftPercentages({ ex, globalPcts, api, onSaved }) {
+function LiftPercentages({ ex, globalSettings, api, onSaved }) {
   const [draft, setDraft] = useState(null); // { endurance_pct, strength_pct } while editing
   const [error, setError] = useState(null);
 
@@ -217,12 +219,39 @@ function LiftPercentages({ ex, globalPcts, api, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={startEdit}>{ex.custom_pcts ? 'Edit %' : 'Customize %'}</button>
           {ex.custom_pcts && (
             <button className="btn btn-ghost btn-sm" onClick={useGlobal}>
-              Use global ({globalPcts.endurance_pct}% · {globalPcts.strength_pct}%)
+              Use global ({globalSettings.endurance_pct}% · {globalSettings.strength_pct}%)
             </button>
           )}
         </div>
       )}
       {error && <div style={{ fontSize:12, color:'#ff6b6b', marginTop:6 }}>{error}</div>}
+    </div>
+  );
+}
+
+// Per-lift rounding increment; a lift with its own ignores the global setting
+function LiftRounding({ ex, globalSettings, api, onSaved }) {
+  const save = async (body) => {
+    await api.put(`/stats/exercises/${ex.id}/rounding`, body);
+    onSaved();
+  };
+
+  return (
+    <div className="lift-pcts">
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', fontSize:12, color:'var(--text2)' }}>
+        <span style={{ flex:'1 1 220px' }}>
+          {ex.custom_rounding
+            ? <><strong style={{ color:'var(--accent)' }}>Custom rounding</strong> for this lift</>
+            : <>Using global rounding</>}
+          {' '}— nearest {ex.round_to} lbs
+        </span>
+        <select className="form-select" style={{ width:'auto', fontSize:12, padding:'5px 8px' }}
+          aria-label="Round this lift to" value={ex.custom_rounding ? String(ex.round_to) : ''}
+          onChange={e => save(e.target.value ? { round_to: parseFloat(e.target.value) } : { reset: true })}>
+          <option value="">Global ({globalSettings.round_to} lbs)</option>
+          {ROUND_OPTIONS.map(r => <option key={r} value={String(r)}>{r} lbs for this lift</option>)}
+        </select>
+      </div>
     </div>
   );
 }

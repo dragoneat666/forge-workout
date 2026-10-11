@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import BodyDiagram, { MUSCLE_GROUPS } from './BodyDiagram';
-import { DEFAULT_PCTS, TRAINING_TYPES, deriveWeights, floorWeight, liftPcts, maxFrom, pctFor } from '../trainingWeights';
+import { DEFAULT_SETTINGS, ROUNDING_LABEL, TRAINING_TYPES, deriveWeights, liftSettings, maxFrom, pctFor, roundTraining } from '../trainingWeights';
 
 function loadSavedMuscles() {
   try {
@@ -70,14 +70,14 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
   // Training type links this entry's weight to the lift's weights in My Stats.
   // New entries default to Strength; older entries start unset until one is picked.
   const [trainingType, setTrainingType] = useState(initial ? (initial.training_type || '') : 'strength');
-  const [savedWeights, setSavedWeights] = useState(null); // { endurance_pct, strength_pct, lifts }
+  const [savedWeights, setSavedWeights] = useState(null); // { endurance_pct, strength_pct, round_to, lifts }
   useEffect(() => {
     fetch('/api/training-weights').then(r => r.json()).then(setSavedWeights)
-      .catch(() => setSavedWeights({ ...DEFAULT_PCTS, lifts:{} }));
+      .catch(() => setSavedWeights({ ...DEFAULT_SETTINGS, lifts:{} }));
   }, []);
 
-  const pcts         = liftPcts(savedWeights, selectedEx?.id);
-  const saved        = savedWeights && selectedEx ? deriveWeights(savedWeights.lifts[selectedEx.id]?.max_weight, pcts) : null;
+  const settings     = liftSettings(savedWeights, selectedEx?.id);
+  const saved        = savedWeights && selectedEx ? deriveWeights(savedWeights.lifts[selectedEx.id]?.max_weight, settings) : null;
   const pulledWeight = saved && trainingType ? saved[trainingType] : 0;
   const trainingLabel = TRAINING_TYPES.find(t => t.key === trainingType)?.label.split(' ')[0];
 
@@ -87,8 +87,9 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
   }, [savedWeights, exerciseId, trainingType]); // eslint-disable-line
 
   const enteredWeight = parseFloat(weight) || 0;
-  const updatesMyStats = !!trainingType && enteredWeight > 0 && floorWeight(enteredWeight) !== pulledWeight;
-  const newWeights = updatesMyStats ? deriveWeights(maxFrom(trainingType, enteredWeight, pcts), pcts) : null;
+  const roundedWeight = trainingType && enteredWeight > 0 ? roundTraining(trainingType, enteredWeight, settings) : 0;
+  const updatesMyStats = !!trainingType && enteredWeight > 0 && roundedWeight !== pulledWeight;
+  const newWeights = updatesMyStats ? deriveWeights(maxFrom(trainingType, enteredWeight, settings), settings) : null;
   // Weight this entry had before it was linked, so it isn't silently lost
   const legacyWeight = initial && !initial.training_type ? (parseFloat(initial.weight) || 0) : 0;
 
@@ -312,7 +313,7 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
               <select className="form-select" value={trainingType} onChange={e=>setTrainingType(e.target.value)}>
                 {!trainingType && <option value="" disabled>— Select training type —</option>}
                 {TRAINING_TYPES.map(t => (
-                  <option key={t.key} value={t.key}>{t.label} ({pctFor(t.key, pcts)}% of Max)</option>
+                  <option key={t.key} value={t.key}>{t.label} ({pctFor(t.key, settings)}% of Max)</option>
                 ))}
               </select>
             </div>
@@ -320,7 +321,7 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Weight (lbs)</label>
-                <input className="form-input" type="number" min="0" step={trainingType ? 1 : 0.25}
+                <input className="form-input" type="number" min="0" step={trainingType ? settings.round_to : 0.25}
                   value={weight} onChange={e=>setWeight(e.target.value)} />
               </div>
               <div className="form-group">
@@ -352,9 +353,14 @@ export default function EntryModal({ title, exercises, initial, onSave, onClose 
                     {saved.max > 0 && <div className="training-note-sub">Other workouts linked to this lift update too.</div>}
                   </>
                 ) : pulledWeight > 0 ? (
-                  <>✓ Pulled from My Stats — {trainingLabel} is {pctFor(trainingType, pcts)}% of your <strong>{saved.max} lbs</strong> Max.</>
+                  <>✓ Pulled from My Stats — {trainingLabel} is {pctFor(trainingType, settings)}% of your <strong>{saved.max} lbs</strong> Max.</>
                 ) : (
                   <>No {trainingLabel} weight saved for <strong>{selectedEx.name}</strong> yet — enter one and it will be saved to My Stats.</>
+                )}
+                {trainingType && roundedWeight > 0 && roundedWeight !== enteredWeight && (
+                  <div className="training-note-sub">
+                    Saves as <strong>{roundedWeight} lbs</strong> — {trainingLabel} {ROUNDING_LABEL[trainingType]} to the nearest {settings.round_to} lbs.
+                  </div>
                 )}
                 {trainingType && pulledWeight > 0 && legacyWeight > 0 && legacyWeight !== enteredWeight && (
                   <div className="training-note-sub">

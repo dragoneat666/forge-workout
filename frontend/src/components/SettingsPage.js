@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ExerciseConflictModal, EquipmentConflictModal } from './ImportConflictModal';
+import { ROUND_OPTIONS } from '../trainingWeights';
 
-// Percentages of Max used for Endurance and Strength training weights
+// Global percentages of Max and rounding used for Endurance and Strength training weights
 function TrainingWeightSettings({ api }) {
   const [pcts,   setPcts]   = useState(null);
+  const [roundTo, setRoundTo] = useState(5);
+  const [roundOptions, setRoundOptions] = useState(ROUND_OPTIONS);
   const [customCount, setCustomCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [msg,    setMsg]    = useState(null);
@@ -11,15 +14,17 @@ function TrainingWeightSettings({ api }) {
   useEffect(() => {
     api.get('/training-weights').then(t => {
       setPcts({ endurance_pct: t.endurance_pct, strength_pct: t.strength_pct });
-      setCustomCount(Object.values(t.lifts || {}).filter(l => l.custom_pcts).length);
+      setRoundTo(t.round_to);
+      if (t.round_options) setRoundOptions(t.round_options);
+      setCustomCount(Object.values(t.lifts || {}).filter(l => l.custom_pcts || l.custom_rounding).length);
     }).catch(()=>{});
   }, []);
 
   const save = async () => {
     setSaving(true); setMsg(null);
-    const r = await api.put('/settings', { endurance_pct: pcts.endurance_pct, strength_pct: pcts.strength_pct });
+    const r = await api.put('/settings', { endurance_pct: pcts.endurance_pct, strength_pct: pcts.strength_pct, round_to: roundTo });
     setSaving(false);
-    setMsg(r.error ? { ok:false, text: r.error } : { ok:true, text:'✓ Saved. Linked workout weights were recalculated (custom-% lifts unchanged).' });
+    setMsg(r.error ? { ok:false, text: r.error } : { ok:true, text:'✓ Saved. Linked workout weights were recalculated (lifts with their own settings unchanged).' });
   };
 
   if (!pcts) return null;
@@ -30,8 +35,9 @@ function TrainingWeightSettings({ api }) {
         Training Weights — Global
       </div>
       <div style={{ fontSize:13, color:'var(--text3)', marginBottom:14, lineHeight:1.6 }}>
-        Global Endurance and Strength percentages of each lift's Max (Max is always 100%). Weights round down to whole pounds.
-        {' '}Lifts given their own percentages in My Stats keep them and aren't affected
+        Global Endurance and Strength percentages of each lift's Max (Max is always 100%), and the increment weights
+        round to: Endurance and Max round down, Strength rounds up.
+        {' '}Lifts given their own percentages or rounding in My Stats keep them and aren't affected
         {customCount > 0 && <> ({customCount} lift{customCount !== 1 ? 's' : ''} currently)</>}.
       </div>
       <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-end' }}>
@@ -42,6 +48,12 @@ function TrainingWeightSettings({ api }) {
               onChange={e => setPcts(p => ({ ...p, [key]: e.target.value }))} />
           </div>
         ))}
+        <div className="form-group" style={{ flex:1, minWidth:150, margin:0 }}>
+          <label className="form-label">Round Weights To</label>
+          <select className="form-select" value={String(roundTo)} onChange={e => setRoundTo(parseFloat(e.target.value))}>
+            {roundOptions.map(r => <option key={r} value={String(r)}>Nearest {r} lbs</option>)}
+          </select>
+        </div>
         <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
       </div>
       {msg && <div style={{ fontSize:12, marginTop:10, color: msg.ok ? 'var(--green)' : '#ff6b6b' }}>{msg.text}</div>}
