@@ -4,18 +4,22 @@ import { ExerciseConflictModal, EquipmentConflictModal } from './ImportConflictM
 // Percentages of Max used for Endurance and Strength training weights
 function TrainingWeightSettings({ api }) {
   const [pcts,   setPcts]   = useState(null);
+  const [customCount, setCustomCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [msg,    setMsg]    = useState(null);
 
   useEffect(() => {
-    api.get('/training-weights').then(t => setPcts({ endurance_pct: t.endurance_pct, strength_pct: t.strength_pct })).catch(()=>{});
+    api.get('/training-weights').then(t => {
+      setPcts({ endurance_pct: t.endurance_pct, strength_pct: t.strength_pct });
+      setCustomCount(Object.values(t.lifts || {}).filter(l => l.custom_pcts).length);
+    }).catch(()=>{});
   }, []);
 
   const save = async () => {
     setSaving(true); setMsg(null);
     const r = await api.put('/settings', { endurance_pct: pcts.endurance_pct, strength_pct: pcts.strength_pct });
     setSaving(false);
-    setMsg(r.error ? { ok:false, text: r.error } : { ok:true, text:'✓ Saved. Linked workout weights were recalculated.' });
+    setMsg(r.error ? { ok:false, text: r.error } : { ok:true, text:'✓ Saved. Linked workout weights were recalculated (custom-% lifts unchanged).' });
   };
 
   if (!pcts) return null;
@@ -23,10 +27,12 @@ function TrainingWeightSettings({ api }) {
     <div className="card" style={{ marginBottom:20 }}>
       <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800, fontSize:18,
         textTransform:'uppercase', letterSpacing:1, color:'var(--accent)', marginBottom:6 }}>
-        Training Weights
+        Training Weights — Global
       </div>
-      <div style={{ fontSize:13, color:'var(--text3)', marginBottom:14 }}>
-        Endurance and Strength weights are a percentage of each lift's Max (100%).
+      <div style={{ fontSize:13, color:'var(--text3)', marginBottom:14, lineHeight:1.6 }}>
+        Global Endurance and Strength percentages of each lift's Max (Max is always 100%). Weights round down to whole pounds.
+        {' '}Lifts given their own percentages in My Stats keep them and aren't affected
+        {customCount > 0 && <> ({customCount} lift{customCount !== 1 ? 's' : ''} currently)</>}.
       </div>
       <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-end' }}>
         {[['endurance_pct','Endurance % of Max'], ['strength_pct','Strength % of Max']].map(([key, label]) => (

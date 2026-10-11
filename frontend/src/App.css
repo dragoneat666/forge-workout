@@ -165,6 +165,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Barlow', sans-se
 .weight-col-label { font-size: 10px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; }
 .weight-col-value { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 20px; }
 .weight-editor { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lift-pcts { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
 @media (max-width: 480px) {
   .weight-cols { gap: 6px; }
   .weight-col { min-width: 40px; }

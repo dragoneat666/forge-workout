@@ -65,6 +65,8 @@ export default function App() {
     if (id === 'days') {
       setSelectedDay(null);
     }
+    // Weights may have changed elsewhere (My Stats, Settings), so refetch workouts
+    if (id === 'days' || id === 'routines') loadDays();
     setView(id);
     setDrawerOpen(false);
   };
@@ -117,7 +119,7 @@ export default function App() {
       )}
 
       <main className="app-main">
-        {view==='home' && <HomePage onNavigate={setView} api={api} />}
+        {view==='home' && <HomePage onNavigate={navigate} api={api} />}
         {view==='days' && (
           <WorkoutDays days={days} onSelectDay={d=>{setSelectedDay(d);setView('day');}} onReload={loadDays} api={api} />
         )}

@@ -10,7 +10,7 @@ const WEIGHT_FIELDS = [
 
 export default function StatsPage({ api }) {
   const [exercises, setExercises] = useState([]);
-  const [pcts,      setPcts]      = useState(DEFAULT_PCTS);
+  const [globalPcts, setGlobalPcts] = useState(DEFAULT_PCTS);
   const [search,    setSearch]    = useState('');
   const [expanded,  setExpanded]  = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -18,7 +18,7 @@ export default function StatsPage({ api }) {
   const load = () => {
     Promise.all([api.get('/stats/exercises'), api.get('/training-weights')]).then(([ex, tw]) => {
       setExercises(ex);
-      setPcts({ endurance_pct: tw.endurance_pct, strength_pct: tw.strength_pct });
+      setGlobalPcts({ endurance_pct: tw.endurance_pct, strength_pct: tw.strength_pct });
       setLoading(false);
     });
   };
@@ -67,6 +67,7 @@ export default function StatsPage({ api }) {
                   </div>
                   <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>
                     {isCardio ? 'Cardio' : linked ? `Linked to ${linked} workout${linked!==1?'s':''}` : 'Not linked to any workouts'}
+                    {!isCardio && ex.custom_pcts && <span style={{ color:'var(--accent)' }}> · Custom %</span>}
                   </div>
                 </div>
                 {!isCardio && (
@@ -88,7 +89,7 @@ export default function StatsPage({ api }) {
               {isExpanded && (
                 <div style={{ padding:'16px 20px', background:'var(--bg3)', border:'1px solid var(--border)',
                   borderTop:'none', borderLeft:'3px solid var(--accent)' }}>
-                  {!isCardio && <TrainingWeightsEditor ex={ex} pcts={pcts} api={api} onSaved={load} />}
+                  {!isCardio && <TrainingWeightsEditor ex={ex} globalPcts={globalPcts} api={api} onSaved={load} />}
 
                   {/* Progress graph */}
                   <ExerciseGraph exId={ex.id} api={api} />
@@ -103,9 +104,10 @@ export default function StatsPage({ api }) {
 }
 
 // Three linked inputs: typing in any one recalculates the other two from the implied Max
-function TrainingWeightsEditor({ ex, pcts, api, onSaved }) {
+function TrainingWeightsEditor({ ex, globalPcts, api, onSaved }) {
   const [draft,  setDraft]  = useState(null); // { field, value } — the box being typed in
   const [saving, setSaving] = useState(false);
+  const pcts = { endurance_pct: ex.endurance_pct, strength_pct: ex.strength_pct };
 
   const draftNum = draft ? parseFloat(draft.value) : NaN;
   const preview  = draftNum > 0 ? deriveWeights(maxFrom(draft.field, draftNum, pcts), pcts) : null;
@@ -143,7 +145,7 @@ function TrainingWeightsEditor({ ex, pcts, api, onSaved }) {
             <label className="form-label" style={{ color:f.color }}>
               {f.label} <span style={{ color:'var(--text3)', fontWeight:400 }}>{pctFor(f.key, pcts)}%</span>
             </label>
-            <input className="form-input" type="number" min="0" step="0.25" inputMode="decimal"
+            <input className="form-input" type="number" min="0" step="1" inputMode="decimal"
               aria-label={`${f.label} weight`} placeholder="—" value={shown(f.key)}
               onChange={e => setDraft({ field:f.key, value:e.target.value })}
               onKeyDown={e => { if (e.key==='Enter') save(); if (e.key==='Escape') setDraft(null); }} />
@@ -151,7 +153,7 @@ function TrainingWeightsEditor({ ex, pcts, api, onSaved }) {
         ))}
       </div>
       <div style={{ fontSize:11, color:'var(--text3)', marginTop:8, lineHeight:1.6 }}>
-        Enter any one — the other two are calculated.
+        Enter any one — the other two are calculated and rounded down to whole pounds.
         {linkedText
           ? <> Linked workouts ({linkedText}) update automatically.</>
           : <> Pick Strength or Endurance Training on a workout exercise to link it here.</>}
@@ -164,6 +166,63 @@ function TrainingWeightsEditor({ ex, pcts, api, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={clear}>Clear</button>
         )}
       </div>
+      <LiftPercentages ex={ex} globalPcts={globalPcts} api={api} onSaved={onSaved} />
+    </div>
+  );
+}
+
+// Per-lift Endurance/Strength percentages; a lift with its own ignores the global setting
+function LiftPercentages({ ex, globalPcts, api, onSaved }) {
+  const [draft, setDraft] = useState(null); // { endurance_pct, strength_pct } while editing
+  const [error, setError] = useState(null);
+
+  const startEdit = () => { setError(null); setDraft({ endurance_pct: ex.endurance_pct, strength_pct: ex.strength_pct }); };
+  const save = async () => {
+    const r = await api.put(`/stats/exercises/${ex.id}/percentages`, draft);
+    if (r.error) return setError(r.error);
+    setDraft(null);
+    onSaved();
+  };
+  const useGlobal = async () => {
+    await api.put(`/stats/exercises/${ex.id}/percentages`, { reset: true });
+    onSaved();
+  };
+
+  return (
+    <div className="lift-pcts">
+      {draft ? (<>
+        <div style={{ display:'flex', gap:10, alignItems:'flex-end', flexWrap:'wrap' }}>
+          {[['endurance_pct','Endurance %'], ['strength_pct','Strength %']].map(([key, label]) => (
+            <div key={key} className="form-group" style={{ margin:0, width:110 }}>
+              <label className="form-label">{label}</label>
+              <input className="form-input" type="number" min="1" max="100" step="1" aria-label={label}
+                value={draft[key]} onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
+                onKeyDown={e => { if (e.key==='Enter') save(); if (e.key==='Escape') setDraft(null); }} />
+            </div>
+          ))}
+          <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setDraft(null)}>Cancel</button>
+        </div>
+        <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>
+          Keeps this lift's Max and recalculates Endurance and Strength. Global changes in Settings won't affect it.
+        </div>
+      </>) : (
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', fontSize:12, color:'var(--text2)' }}>
+          <span style={{ flex:'1 1 220px' }}>
+            {ex.custom_pcts
+              ? <><strong style={{ color:'var(--accent)' }}>Custom %</strong> for this lift</>
+              : <>Using global %</>}
+            {' '}— Endurance {ex.endurance_pct}% · Strength {ex.strength_pct}%
+          </span>
+          <button className="btn btn-ghost btn-sm" onClick={startEdit}>{ex.custom_pcts ? 'Edit %' : 'Customize %'}</button>
+          {ex.custom_pcts && (
+            <button className="btn btn-ghost btn-sm" onClick={useGlobal}>
+              Use global ({globalPcts.endurance_pct}% · {globalPcts.strength_pct}%)
+            </button>
+          )}
+        </div>
+      )}
+      {error && <div style={{ fontSize:12, color:'#ff6b6b', marginTop:6 }}>{error}</div>}
     </div>
   );
 }
