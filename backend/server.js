@@ -964,13 +964,6 @@ app.put('/api/sessions/:id/complete', (req, res) => {
   res.json({ ok:true });
 });
 
-// Delete a session
-app.delete('/api/sessions/:id', (req, res) => {
-  db.prepare('DELETE FROM session_exercises WHERE session_id=?').run(req.params.id);
-  db.prepare('DELETE FROM workout_sessions WHERE id=?').run(req.params.id);
-  res.json({ ok:true });
-});
-
 // Check off an exercise in a session
 app.put('/api/session-exercises/:id/complete', (req, res) => {
   const { completed } = req.body;
