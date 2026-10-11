@@ -687,8 +687,18 @@ app.get('/api/days', (req, res) => {
 app.post('/api/days', (req, res) => {
   const { name, description='' } = req.body;
   if (!name) return res.status(400).json({ error:'Name required' });
-  const r = db.prepare('INSERT INTO workout_days (name,description) VALUES (?,?)').run(name, description);
+  // New days go to the end of the user's custom order
+  const next = db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM workout_days').get().n;
+  const r = db.prepare('INSERT INTO workout_days (name,description,sort_order) VALUES (?,?,?)').run(name, description, next);
   res.json(db.prepare('SELECT * FROM workout_days WHERE id=?').get(r.lastInsertRowid));
+});
+// Reorder workout days — must be registered before PUT /api/days/:id, which would
+// otherwise match "reorder" as an id
+app.put('/api/days/reorder', (req, res) => {
+  const { ids } = req.body; // array of day ids in new order
+  const update = db.prepare('UPDATE workout_days SET sort_order=? WHERE id=?');
+  ids.forEach((id, idx) => update.run(idx, id));
+  res.json({ ok:true });
 });
 app.put('/api/days/:id', (req, res) => {
   const { name, description } = req.body;
@@ -697,14 +707,6 @@ app.put('/api/days/:id', (req, res) => {
 });
 app.delete('/api/days/:id', (req, res) => {
   db.prepare('DELETE FROM workout_days WHERE id=?').run(req.params.id);
-  res.json({ ok:true });
-});
-
-// Reorder workout days
-app.put('/api/days/reorder', (req, res) => {
-  const { ids } = req.body; // array of day ids in new order
-  const update = db.prepare('UPDATE workout_days SET sort_order=? WHERE id=?');
-  ids.forEach((id, idx) => update.run(idx, id));
   res.json({ ok:true });
 });
 
